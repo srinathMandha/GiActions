@@ -18,29 +18,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Set variables based on input
+        shell: cmd
         run: |
           @echo off
-          set "ENV=%{{ github.event.inputs.environment }}"
+          set "ENV=${{ github.event.inputs.environment }}"
           echo Selected environment: %ENV%
           
           if "%ENV%"=="development" (
               echo Setting environment to Development
-              echo ENV_URL=https://dev.example.com >> %GITHUB_ENV%
-              echo DEBUG_MODE=true >> %GITHUB_ENV%
-          ) else if "%ENV%"=="staging" (
-              echo Setting environment to Staging
-              echo ENV_URL=https://staging.example.com >> %GITHUB_ENV%
-              echo DEBUG_MODE=false >> %GITHUB_ENV%
-          ) else if "%ENV%"=="production" (
-              echo Setting environment to Production
-              echo ENV_URL=https://prod.example.com >> %GITHUB_ENV%
-              echo DEBUG_MODE=false >> %GITHUB_ENV%
-          ) else (
-              echo Invalid environment selected
-              exit /b 1
-          )
-      - name: Display selected environment and variables
-        run: |
-          @echo off
-          echo Environment URL: %ENV_URL%
-          echo Debug mode: %DEBUG_MODE%
+              echo ENV_URL
