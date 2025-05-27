@@ -1,0 +1,8 @@
+name: Call JavaActions Hello Workflow
+
+on:
+  workflow_dispatch:
+
+jobs:
+  call-javaactions:
+    uses: srinathMandha/JavaActions/.github/workflows/hello.yml@main
