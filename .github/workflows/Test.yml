@@ -1,3 +1,4 @@
+# Your caller workflow (e.g., in another repo)
 name: Call JavaActions Hello Workflow
 
 on:
@@ -6,3 +7,10 @@ on:
 jobs:
   call-javaactions:
     uses: srinathMandha/JavaActions/.github/workflows/hello.yml@main
+
+  log-output:
+    needs: call-javaactions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print greeting
+        run: echo "Message from reusable workflow: ${{ needs.call-javaactions.outputs.message }}"
