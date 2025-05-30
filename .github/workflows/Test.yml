@@ -6,10 +6,10 @@ on:
 
 jobs:
   call-hello:
-    uses: ./.github/workflows/hello.yml
+    uses: srinathMandha/JavaActions/.github/workflows/hello.yml@main
 
   call-bye:
-    uses: ./.github/workflows/bye.yml
+    uses: srinathMandha/JavaActions/.github/workflows/bye.yml@main
 
   log:
     needs: [call-hello, call-bye]
