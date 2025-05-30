@@ -13,4 +13,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Print greeting
-        run: echo "Message from reusable workflow: ${{ needs.call-javaactions.outputs.message }}"
+        run: echo "Message from reusable workflow:${{ needs.call-javaactions.outputs.message }}"
