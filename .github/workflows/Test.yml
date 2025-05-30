@@ -1,4 +1,4 @@
-# Your caller workflow (e.g., in another repo)
+# In your current repo (caller)
 name: Call JavaActions Hello Workflow
 
 on:
