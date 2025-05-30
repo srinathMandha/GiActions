@@ -1,16 +1,21 @@
-# In your current repo (caller)
-name: Call JavaActions Hello Workflow
+# .github/workflows/caller.yml
+name: Call Hello and Bye Workflows
 
 on:
   workflow_dispatch:
 
 jobs:
-  call-javaactions:
-    uses: srinathMandha/JavaActions/.github/workflows/hello.yml@main
+  call-hello:
+    uses: ./.github/workflows/hello.yml
 
-  log-output:
-    needs: call-javaactions
+  call-bye:
+    uses: ./.github/workflows/bye.yml
+
+  log:
+    needs: [call-hello, call-bye]
     runs-on: ubuntu-latest
     steps:
-      - name: Print greeting
-        run: echo "Message from reusable workflow:${{ needs.call-javaactions.outputs.message }}"
+      - name: Log messages
+        run: |
+          echo "Hello output: ${{ needs.call-hello.outputs.message }}"
+          echo "Bye output: ${{ needs.call-bye.outputs.message }}"
