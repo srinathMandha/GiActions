@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       target_url:
-        description: 'Target URL or domain'
+        description: 'Target URL or domain (e.g., example.com)'
         required: true
-        default: 'example'
+        default: ''
         type: string
       cert_type:
         description: 'Certificate type to download'
@@ -32,6 +32,7 @@ jobs:
           CLEAN_URL="${CLEAN_URL#*://}"
           CLEAN_URL="${CLEAN_URL%%/*}"
           echo "domain=$CLEAN_URL" >> $GITHUB_OUTPUT
+          echo "Resolved Domain: $CLEAN_URL"
 
       - name: Fetch SSL certificate
         run: |
@@ -42,18 +43,16 @@ jobs:
           mkdir -p cert-output
           
           if [ "$TYPE" == "leaf" ]; then
-            openssl s_client -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null | openssl x509 -outform PEM > "cert-output/${DOMAIN}-leaf.crt"
+            openssl s_client -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null | openssl x509 -outform PEM > "cert-output/${DOMAIN}.crt"
           elif [ "$TYPE" == "chain" ]; then
-            openssl s_client -showcerts -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null > "cert-output/${DOMAIN}-full-chain.pem"
+            openssl s_client -showcerts -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null | openssl x509 -outform PEM > "cert-output/${DOMAIN}-full-chain.crt"
           elif [ "$TYPE" == "split" ]; then
-            # Grabs the full chain and saves raw text for splitting
             openssl s_client -showcerts -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null > full_chain.pem
-            # Basic separation into individual files
-            awk 'n==0 {n=1;print > "cert-output/cert-"++c ".crt"} /-----END CERTIFICATE-----/ {n=0}' full_chain.pem
+            awk 'n==0 {n=1;print > "cert-output/'"${DOMAIN}"'-cert-"++c ".crt"} /-----END CERTIFICATE-----/ {n=0}' full_chain.pem
           fi
 
       - name: Upload certificate artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ssl-certificates-${{ inputs.cert_type }}
+          name: ssl-certificate-${{ steps.parse_url.outputs.domain }}
           path: cert-output/*
