@@ -34,7 +34,7 @@ jobs:
           echo "domain=$CLEAN_URL" >> $GITHUB_OUTPUT
           echo "Resolved Domain: $CLEAN_URL"
 
-      - name: Fetch and clean SSL certificate
+      - name: Fetch and Print SSL certificate
         run: |
           DOMAIN="${{ steps.parse_url.outputs.domain }}"
           TYPE="${{ inputs.cert_type }}"
@@ -42,7 +42,7 @@ jobs:
           
           mkdir -p cert-output
           
-          # Extract only valid certificate text blocks directly from the server handshake, omitting all logs
+          # Extract only valid certificate text blocks directly from the server handshake, omitting logs
           openssl s_client -showcerts -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null \
             | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' > raw_chain.pem
           
@@ -52,20 +52,25 @@ jobs:
           fi
 
           if [ "$TYPE" == "leaf" ]; then
-            # Output strictly the first leaf certificate content
-            awk '/-----BEGIN CERTIFICATE-----/{flag=1} flag; /-----END CERTIFICATE-----/{flag=0; exit}' raw_chain.pem > "cert-output/${DOMAIN}.crt"
+            echo "========================================="
+            echo "LEAF CERTIFICATE (${DOMAIN}.crt)"
+            echo "========================================="
+            awk '/-----BEGIN CERTIFICATE-----/{flag=1} flag; /-----END CERTIFICATE-----/{flag=0; exit}' raw_chain.pem
             
           elif [ "$TYPE" == "chain" ]; then
-            # Output the full chain containing only certificate blocks
-            cp raw_chain.pem "cert-output/${DOMAIN}-full-chain.crt"
+            echo "========================================="
+            echo "FULL CHAIN CERTIFICATE (${DOMAIN}-full-chain.crt)"
+            echo "========================================="
+            cat raw_chain.pem
             
           elif [ "$TYPE" == "split" ]; then
-            # Split each layer into independent .crt files containing exclusively certificate content
-            awk 'n==0 {n=1;print > "cert-output/'"${DOMAIN}"'-cert-"++c ".crt"} /-----END CERTIFICATE-----/ {n=0}' raw_chain.pem
+            awk 'n==0 {n=1; print > "cert-output/'"${DOMAIN}"'-cert-"++c ".crt"} /-----END CERTIFICATE-----/ {n=0}' raw_chain.pem
+            
+            for f in cert-output/*.crt; do
+              echo "========================================="
+              echo "FILE: $(basename "$f")"
+              echo "========================================="
+              cat "$f"
+              echo ""
+            done
           fi
-
-      - name: Upload certificate artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ssl-certificate-${{ steps.parse_url.outputs.domain }}
-          path: cert-output/*
