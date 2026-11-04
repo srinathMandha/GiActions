@@ -34,7 +34,7 @@ jobs:
           echo "domain=$CLEAN_URL" >> $GITHUB_OUTPUT
           echo "Resolved Domain: $CLEAN_URL"
 
-      - name: Fetch SSL certificate
+      - name: Fetch and clean SSL certificate
         run: |
           DOMAIN="${{ steps.parse_url.outputs.domain }}"
           TYPE="${{ inputs.cert_type }}"
@@ -42,19 +42,25 @@ jobs:
           
           mkdir -p cert-output
           
-          # Always fetch the raw full chain block first
-          openssl s_client -showcerts -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null > raw_chain.pem
+          # Extract only valid certificate text blocks directly from the server handshake, omitting all logs
+          openssl s_client -showcerts -connect "${DOMAIN}:443" -servername "${DOMAIN}" </dev/null 2>/dev/null \
+            | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' > raw_chain.pem
           
+          if [ ! -s raw_chain.pem ]; then
+            echo "Error: Failed to retrieve certificate payload from $DOMAIN"
+            exit 1
+          fi
+
           if [ "$TYPE" == "leaf" ]; then
-            # Extract just the first certificate (leaf) and save as .crt
-            openssl x509 -in raw_chain.pem -outform PEM > "cert-output/${DOMAIN}.crt"
+            # Output strictly the first leaf certificate content
+            awk '/-----BEGIN CERTIFICATE-----/{flag=1} flag; /-----END CERTIFICATE-----/{flag=0; exit}' raw_chain.pem > "cert-output/${DOMAIN}.crt"
             
           elif [ "$TYPE" == "chain" ]; then
-            # Keep all certificates found in the chain and save as a full chain .crt file
+            # Output the full chain containing only certificate blocks
             cp raw_chain.pem "cert-output/${DOMAIN}-full-chain.crt"
             
           elif [ "$TYPE" == "split" ]; then
-            # Use awk to separate every individual certificate block into its own numbered .crt file
+            # Split each layer into independent .crt files containing exclusively certificate content
             awk 'n==0 {n=1;print > "cert-output/'"${DOMAIN}"'-cert-"++c ".crt"} /-----END CERTIFICATE-----/ {n=0}' raw_chain.pem
           fi
 
