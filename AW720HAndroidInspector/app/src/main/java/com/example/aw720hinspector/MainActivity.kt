@@ -11,6 +11,7 @@ import java.util.Locale
 class MainActivity : Activity() {
     private lateinit var usbManager: UsbManager
     private lateinit var output: TextView
+    private lateinit var batteryStatus: TextView
     private val actionUsbPermission = "com.example.aw720hinspector.USB_PERMISSION"
 
     private val permissionReceiver = object : BroadcastReceiver() {
@@ -18,8 +19,10 @@ class MainActivity : Activity() {
             if (intent.action == actionUsbPermission) {
                 val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                 val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                if (device != null && granted) runFullDiagnostic(device)
-                else append("USB permission was not granted.")
+                val batteryOnly = intent.getBooleanExtra("BATTERY_ONLY", false)
+                if (device != null && granted) {
+                    if (batteryOnly) runBatteryRead(device) else runFullDiagnostic(device)
+                } else append("USB permission was not granted.")
             }
         }
     }
@@ -51,6 +54,17 @@ class MainActivity : Activity() {
             text = "Run full read-only diagnostic"
             setOnClickListener { scanDevices() }
         })
+        batteryStatus = TextView(this).apply {
+            text = "Battery status: Not checked"
+            textSize = 16f
+            setTextColor(0xFFFFFFFF.toInt())
+            setPadding(0, 18, 0, 8)
+        }
+        layout.addView(batteryStatus)
+        layout.addView(Button(this).apply {
+            text = "Refresh battery status (read-only)"
+            setOnClickListener { scanDevices(batteryOnly = true) }
+        })
         layout.addView(Button(this).apply {
             text = "Copy full debug log"
             setOnClickListener {
@@ -73,7 +87,7 @@ class MainActivity : Activity() {
         registerReceiver(permissionReceiver, IntentFilter(actionUsbPermission), RECEIVER_NOT_EXPORTED)
     }
 
-    private fun scanDevices() {
+    private fun scanDevices(batteryOnly: Boolean = false) {
         val devices = usbManager.deviceList.values
         val target = devices.firstOrNull { it.vendorId == 0x413C && it.productId == 0xA518 }
         if (target == null) {
@@ -83,13 +97,74 @@ class MainActivity : Activity() {
             return
         }
         output.text = "Found ${target.deviceName}\nVID=${hex(target.vendorId)} PID=${hex(target.productId)}\nRequesting USB permission…"
-        if (usbManager.hasPermission(target)) runFullDiagnostic(target) else {
+        if (usbManager.hasPermission(target)) {
+            if (batteryOnly) runBatteryRead(target) else runFullDiagnostic(target)
+        } else {
+            val permissionIntent = Intent(actionUsbPermission).setPackage(packageName)
+                .putExtra("BATTERY_ONLY", batteryOnly)
             val intent = PendingIntent.getBroadcast(
-                this, 0, Intent(actionUsbPermission).setPackage(packageName),
+                this, if (batteryOnly) 1 else 0, permissionIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
             usbManager.requestPermission(target, intent)
         }
+    }
+
+    // Reads only the two HID Input reports already exposed by the device descriptor.
+    // Their byte layout is not decoded as a percentage until it is verified.
+    private fun runBatteryRead(device: UsbDevice) {
+        val connection = usbManager.openDevice(device)
+        if (connection == null) {
+            batteryStatus.text = "Battery status: Could not open USB device"
+            append("Battery refresh failed: could not open USB device.")
+            return
+        }
+        batteryStatus.text = "Battery status: Reading dongle reports…"
+        Thread {
+            val resultLog = StringBuilder()
+            try {
+                val hid = (0 until device.interfaceCount).map { device.getInterface(it) }
+                    .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_HID }
+                if (hid == null) {
+                    logLine(resultLog, "Battery read: no HID interface found.")
+                } else if (!connection.claimInterface(hid, true)) {
+                    logLine(resultLog, "Battery read: could not claim HID interface ${hid.id}.")
+                } else {
+                    try {
+                        logLine(resultLog, "AW720H BATTERY REPORT REFRESH (read-only)")
+                        logLine(resultLog, "Timestamp: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSZ", Locale.US).format(java.util.Date())}")
+                        logLine(resultLog, "Device VID=0x413C PID=0xA518, HID interface=${hid.id}")
+                        val report7 = readHidInputReport(connection, hid.id, 0x07, 61)
+                        val report8 = readHidInputReport(connection, hid.id, 0x08, 7)
+                        logLine(resultLog, "Input report 0x07: ${report7.first} bytes; data=${report7.second}")
+                        logLine(resultLog, "Input report 0x08: ${report8.first} bytes; data=${report8.second}")
+                        logLine(resultLog, "Battery percentage: NOT DECODED — report field mapping is not yet verified.")
+                        logLine(resultLog, "Only HID GET_REPORT Input requests were sent. No output report or setting change.")
+                    } finally {
+                        try { connection.releaseInterface(hid) } catch (_: Exception) {}
+                    }
+                }
+            } catch (e: Exception) {
+                logLine(resultLog, "Battery read error: ${e.javaClass.simpleName}: ${e.message}")
+                logLine(resultLog, "STACK TRACE:\n${android.util.Log.getStackTraceString(e)}")
+            } finally {
+                connection.close()
+                runOnUiThread {
+                    val details = resultLog.toString()
+                    batteryStatus.text = "Battery status: Raw HID reports captured (percentage not decoded)"
+                    output.text = output.text.toString() + "\n\n" + details
+                }
+            }
+        }.start()
+    }
+
+    private fun readHidInputReport(c: UsbDeviceConnection, interfaceId: Int, reportId: Int, payloadLength: Int): Pair<Int, String> {
+        val buffer = ByteArray(payloadLength + 1)
+        val transferred = c.controlTransfer(
+            0xA1, 0x01, (0x01 shl 8) or reportId, interfaceId,
+            buffer, buffer.size, 1000
+        )
+        return transferred to bytes(buffer, transferred)
     }
 
     private fun runFullDiagnostic(device: UsbDevice) {
