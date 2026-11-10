@@ -52,11 +52,11 @@ class MainActivity : Activity() {
             setOnClickListener { scanDevices() }
         })
         layout.addView(Button(this).apply {
-            text = "Copy results"
+            text = "Copy full debug log"
             setOnClickListener {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("AW720H full USB diagnostic", output.text))
-                Toast.makeText(this@MainActivity, "Results copied. Paste them into ChatGPT.", Toast.LENGTH_LONG).show()
+                clipboard.setPrimaryClip(ClipData.newPlainText("AW720H full debug log", output.text))
+                Toast.makeText(this@MainActivity, "Full debug log copied. Paste it into ChatGPT.", Toast.LENGTH_LONG).show()
             }
         })
         output = TextView(this).apply {
@@ -102,7 +102,11 @@ class MainActivity : Activity() {
         Thread {
             val log = StringBuilder()
             try {
-                log.appendLine("AW720H FULL READ-ONLY USB DIAGNOSTIC")
+                logLine(log, "AW720H FULL READ-ONLY USB DIAGNOSTIC")
+                logLine(log, "Timestamp: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSZ", Locale.US).format(java.util.Date())}")
+                logLine(log, "Android: ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})")
+                logLine(log, "Manufacturer/model: ${android.os.Build.MANUFACTURER} / ${android.os.Build.MODEL}")
+                logLine(log, "App package: $packageName")
                 log.appendLine("Device: ${device.deviceName} VID=${hex(device.vendorId)} PID=${hex(device.productId)}")
                 log.appendLine("Interfaces reported by Android: ${device.interfaceCount}")
                 log.appendLine("No USB OUT transfers, HID output reports or settings-changing requests are sent.")
@@ -289,6 +293,11 @@ class MainActivity : Activity() {
             }
             pos += size
         }
+    }
+
+    private fun logLine(log: StringBuilder, message: String) {
+        val stamp = java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(java.util.Date())
+        log.append("[").append(stamp).append("] ").append(message).append('\\n')
     }
 
     private fun bytes(data: ByteArray, length: Int): String =
