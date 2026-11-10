@@ -47,6 +47,14 @@ class MainActivity : Activity() {
             text = "Scan for AW720H dongle"
             setOnClickListener { scanDevices() }
         }
+        val copy = Button(this).apply {
+            text = "Copy results"
+            setOnClickListener {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("AW720H USB inspection results", output.text))
+                Toast.makeText(this@MainActivity, "Results copied. Paste them into ChatGPT.", Toast.LENGTH_LONG).show()
+            }
+        }
         output = TextView(this).apply {
             textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
@@ -57,6 +65,7 @@ class MainActivity : Activity() {
         layout.addView(title)
         layout.addView(info)
         layout.addView(scan)
+        layout.addView(copy)
         layout.addView(output)
         val scroll = ScrollView(this)
         scroll.addView(layout)
