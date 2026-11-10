@@ -47,6 +47,10 @@ class MainActivity : Activity() {
             text = "Scan for AW720H dongle"
             setOnClickListener { scanDevices() }
         }
+        val vendorCapture = Button(this).apply {
+            text = "Capture vendor input reports (10 seconds)"
+            setOnClickListener { captureVendorInput() }
+        }
         val capture = Button(this).apply {
             text = "Capture headset input (10 seconds)"
             setOnClickListener { captureInput() }
@@ -69,6 +73,7 @@ class MainActivity : Activity() {
         layout.addView(title)
         layout.addView(info)
         layout.addView(scan)
+        layout.addView(vendorCapture)
         layout.addView(capture)
         layout.addView(copy)
         layout.addView(output)
@@ -154,6 +159,68 @@ class MainActivity : Activity() {
         output.text = report.toString()
     }
 
+
+
+    private fun captureVendorInput() {
+        val device = usbManager.deviceList.values.firstOrNull {
+            it.vendorId == 0x413C && it.productId == 0xA518
+        }
+        if (device == null) {
+            output.text = "AW720H dongle not found. Connect it by USB OTG first."
+            return
+        }
+        if (!usbManager.hasPermission(device)) {
+            output.text = "USB permission missing. Tap Scan first and grant permission."
+            return
+        }
+        val hid = (0 until device.interfaceCount).map { device.getInterface(it) }
+            .firstOrNull { it.id == 3 && it.interfaceClass == UsbConstants.USB_CLASS_HID }
+        if (hid == null) {
+            output.text = "HID interface 3 not found."
+            return
+        }
+        val connection = usbManager.openDevice(device)
+        if (connection == null) {
+            output.text = "Could not open USB device."
+            return
+        }
+        val captured = StringBuilder()
+        captured.appendLine("AW720H vendor HID input report polling")
+        captured.appendLine("Read-only GET_REPORT requests for IDs 0x07 (61 bytes) and 0x08 (7 bytes)")
+        captured.appendLine("No output or feature reports are sent.")
+        Thread {
+            try {
+                if (!connection.claimInterface(hid, true)) {
+                    captured.appendLine("Could not claim HID interface 3.")
+                } else {
+                    val deadline = System.currentTimeMillis() + 10_000
+                    var count = 0
+                    while (System.currentTimeMillis() < deadline) {
+                        for ((reportId, size) in listOf(7 to 61, 8 to 7)) {
+                            val buffer = ByteArray(size + 1)
+                            val result = connection.controlTransfer(
+                                0xA1, 0x01, (0x01 shl 8) or reportId, 3,
+                                buffer, buffer.size, 250
+                            )
+                            if (result > 0) {
+                                count++
+                                captured.appendLine("Report 0x${reportId.toString(16).padStart(2, '0')} ($result bytes): " +
+                                    buffer.take(result).joinToString(" ") { "%02x".format(it) })
+                            }
+                        }
+                    }
+                    if (count == 0) captured.appendLine("No vendor input reports returned. The dongle may only provide these reports in response to specific device events.")
+                    connection.releaseInterface(hid)
+                }
+            } catch (e: Exception) {
+                captured.appendLine("Polling error: ${e.javaClass.simpleName}: ${e.message}")
+            } finally {
+                connection.close()
+                runOnUiThread { output.text = captured.toString() }
+            }
+        }.start()
+        output.text = "Polling vendor input reports for 10 seconds… Try mic mute/unmute now."
+    }
 
     private fun captureInput() {
         val device = usbManager.deviceList.values.firstOrNull {
