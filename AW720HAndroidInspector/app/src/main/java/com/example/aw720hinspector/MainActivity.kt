@@ -107,50 +107,50 @@ class MainActivity : Activity() {
                 logLine(log, "Android: ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})")
                 logLine(log, "Manufacturer/model: ${android.os.Build.MANUFACTURER} / ${android.os.Build.MODEL}")
                 logLine(log, "App package: $packageName")
-                log.appendLine("Device: ${device.deviceName} VID=${hex(device.vendorId)} PID=${hex(device.productId)}")
-                log.appendLine("Interfaces reported by Android: ${device.interfaceCount}")
-                log.appendLine("No USB OUT transfers, HID output reports or settings-changing requests are sent.")
+                logLine(log, "Device: ${device.deviceName} VID=${hex(device.vendorId)} PID=${hex(device.productId)}")
+                logLine(log, "Interfaces reported by Android: ${device.interfaceCount}")
+                logLine(log, "No USB OUT transfers, HID output reports or settings-changing requests are sent.")
                 val config = ByteArray(4096)
                 val configLen = connection.controlTransfer(0x80, 0x06, 0x0200, 0, config, config.size, 2000)
-                log.appendLine("\n=== RAW CONFIGURATION DESCRIPTOR (length=$configLen) ===")
+                logLine(log, "\n=== RAW CONFIGURATION DESCRIPTOR (length=$configLen) ===")
                 if (configLen > 0) {
-                    log.appendLine(config.take(configLen).joinToString(" ") { "%02x".format(it) })
+                    logLine(log, config.take(configLen).joinToString(" ") { "%02x".format(it) })
                     parseConfiguration(config, configLen, log)
-                } else log.appendLine("Configuration descriptor request returned $configLen")
+                } else logLine(log, "Configuration descriptor request returned $configLen")
 
                 for (i in 0 until device.interfaceCount) {
                     val intf = device.getInterface(i)
-                    log.appendLine("\n=== INTERFACE id=${intf.id} alt=${intf.alternateSetting} class=${hex(intf.interfaceClass)} subclass=${hex(intf.interfaceSubclass)} protocol=${hex(intf.interfaceProtocol)} ===")
+                    logLine(log, "\n=== INTERFACE id=${intf.id} alt=${intf.alternateSetting} class=${hex(intf.interfaceClass)} subclass=${hex(intf.interfaceSubclass)} protocol=${hex(intf.interfaceProtocol)} ===")
                     val claimed = try { connection.claimInterface(intf, true) } catch (e: Exception) {
-                        log.appendLine("Claim error: ${e.message}"); false
+                        logLine(log, "Claim error: ${e.message}"); false
                     }
-                    log.appendLine("Claimed: $claimed")
+                    logLine(log, "Claimed: $claimed")
                     if (!claimed) continue
                     try {
                         // Standard GET_STATUS: read-only, recipient=interface.
                         val status = ByteArray(2)
                         val statusLen = connection.controlTransfer(0x81, 0x00, 0, intf.id, status, 2, 500)
-                        log.appendLine("Standard interface GET_STATUS: len=$statusLen data=${bytes(status, statusLen)}")
+                        logLine(log, "Standard interface GET_STATUS: len=$statusLen data=${bytes(status, statusLen)}")
 
                         if (intf.interfaceClass == UsbConstants.USB_CLASS_HID) {
                             inspectHid(connection, intf, log)
                         } else if (intf.interfaceClass == UsbConstants.USB_CLASS_AUDIO) {
-                            log.appendLine("Audio class interface: class-specific descriptors are included in the raw configuration dump above.")
+                            logLine(log, "Audio class interface: class-specific descriptors are included in the raw configuration dump above.")
                             queryAudioFeatureUnits(connection, config, configLen, intf.id, log)
                         } else {
-                            log.appendLine("No class-specific control requests sent for this interface; descriptor and standard status inspection only.")
+                            logLine(log, "No class-specific control requests sent for this interface; descriptor and standard status inspection only.")
                         }
 
                         for (e in 0 until intf.endpointCount) {
                             val ep = intf.getEndpoint(e)
-                            log.appendLine("Endpoint ${ep.endpointNumber}: direction=${if (ep.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"}, type=${ep.type}, maxPacket=${ep.maxPacketSize}, interval=${ep.interval}")
+                            logLine(log, "Endpoint ${ep.endpointNumber}: direction=${if (ep.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"}, type=${ep.type}, maxPacket=${ep.maxPacketSize}, interval=${ep.interval}")
                         }
                     } finally {
                         try { connection.releaseInterface(intf) } catch (_: Exception) {}
                     }
                 }
                 // Read interrupt IN endpoints on HID interfaces after descriptor/control inspection.
-                log.appendLine("\n=== HID INTERRUPT INPUT CAPTURE (5 seconds total) ===")
+                logLine(log, "\n=== HID INTERRUPT INPUT CAPTURE (5 seconds total) ===")
                 val hidInterfaces = (0 until device.interfaceCount).map { device.getInterface(it) }
                     .filter { it.interfaceClass == UsbConstants.USB_CLASS_HID }
                 val endTime = System.currentTimeMillis() + 5000
@@ -160,7 +160,7 @@ class MainActivity : Activity() {
                     } ?: continue
                     if (System.currentTimeMillis() >= endTime) break
                     if (!connection.claimInterface(intf, true)) {
-                        log.appendLine("HID interface ${intf.id}: could not claim for interrupt capture")
+                        logLine(log, "HID interface ${intf.id}: could not claim for interrupt capture")
                         continue
                     }
                     try {
@@ -170,19 +170,20 @@ class MainActivity : Activity() {
                             val n = connection.bulkTransfer(ep, buffer, buffer.size, 250)
                             if (n > 0) {
                                 packetCount++
-                                log.appendLine("HID interface ${intf.id} packet $packetCount: ${bytes(buffer, n)}")
+                                logLine(log, "HID interface ${intf.id} packet $packetCount: ${bytes(buffer, n)}")
                             }
                         }
-                        if (packetCount == 0) log.appendLine("HID interface ${intf.id}: no interrupt packets during capture")
+                        if (packetCount == 0) logLine(log, "HID interface ${intf.id}: no interrupt packets during capture")
                     } finally {
                         try { connection.releaseInterface(intf) } catch (_: Exception) {}
                     }
                 }
-                log.appendLine("\n=== END ===")
-                log.appendLine("Read-only requests performed: configuration/report descriptors, standard interface GET_STATUS, HID GET_REPORT for input/feature reports declared by the report descriptor, and Audio Class GET_CUR for discovered mute controls.")
-                log.appendLine("No output report or USB OUT transfer was sent.")
+                logLine(log, "\n=== END ===")
+                logLine(log, "Read-only requests performed: configuration/report descriptors, standard interface GET_STATUS, HID GET_REPORT for input/feature reports declared by the report descriptor, and Audio Class GET_CUR for discovered mute controls.")
+                logLine(log, "No output report or USB OUT transfer was sent.")
             } catch (e: Exception) {
-                log.appendLine("\nDiagnostic error: ${e.javaClass.simpleName}: ${e.message}")
+                logLine(log, "\nDiagnostic error: ${e.javaClass.simpleName}: ${e.message}")
+                logLine(log, "STACK TRACE:\n${android.util.Log.getStackTraceString(e)}")
             } finally {
                 connection.close()
                 runOnUiThread { output.text = log.toString() }
@@ -193,9 +194,9 @@ class MainActivity : Activity() {
     private fun inspectHid(c: UsbDeviceConnection, intf: UsbInterface, log: StringBuilder) {
         val desc = ByteArray(2048)
         val n = c.controlTransfer(0x81, 0x06, 0x2200, intf.id, desc, desc.size, 1500)
-        log.appendLine("HID report descriptor length=$n")
+        logLine(log, "HID report descriptor length=$n")
         if (n <= 0) return
-        log.appendLine("HID report descriptor: ${bytes(desc, n)}")
+        logLine(log, "HID report descriptor: ${bytes(desc, n)}")
         val reports = parseHidReports(desc, n)
         for ((key, size) in reports) {
             val type = key.first
@@ -203,7 +204,7 @@ class MainActivity : Activity() {
             if (type != 1 && type != 3) continue // Input and Feature GET_REPORT only; never Output.
             val buffer = ByteArray((size + 1).coerceAtMost(1024))
             val result = c.controlTransfer(0xA1, 0x01, (type shl 8) or id, intf.id, buffer, buffer.size, 500)
-            log.appendLine("HID GET_REPORT type=$type id=0x${id.toString(16)} expectedPayload=$size result=$result data=${bytes(buffer, result)}")
+            logLine(log, "HID GET_REPORT type=$type id=0x${id.toString(16)} expectedPayload=$size result=$result data=${bytes(buffer, result)}")
         }
     }
 
@@ -264,20 +265,20 @@ class MainActivity : Activity() {
                         val controls = (0 until controlSize).fold(0L) { acc, j ->
                             acc or ((config[pos + 6 + j].toLong() and 0xff) shl (8 * j))
                         }
-                        log.appendLine("Audio Feature Unit candidate: interface=$interfaceId unit=$unitId controlSize=$controlSize masterControls=0x${controls.toString(16)}")
+                        logLine(log, "Audio Feature Unit candidate: interface=$interfaceId unit=$unitId controlSize=$controlSize masterControls=0x${controls.toString(16)}")
                         if ((controls and 1L) != 0L) {
                             val value = ByteArray(4)
                             val idx = (unitId shl 8) or interfaceId
                             val got = c.controlTransfer(0xA1, 0x81, 0x0100, idx, value, 1, 700)
-                            log.appendLine("Audio Class GET_CUR mute (unit=$unitId channel=0): len=$got value=${bytes(value, got)} (0=unmuted, 1=muted when supported)")
+                            logLine(log, "Audio Class GET_CUR mute (unit=$unitId channel=0): len=$got value=${bytes(value, got)} (0=unmuted, 1=muted when supported)")
                             found++
-                        } else log.appendLine("Mute control bit not advertised in master channel; no mute query sent.")
+                        } else logLine(log, "Mute control bit not advertised in master channel; no mute query sent.")
                     }
                 }
             }
             pos += size
         }
-        if (found == 0) log.appendLine("No advertised Audio Feature Unit mute control found for this interface.")
+        if (found == 0) logLine(log, "No advertised Audio Feature Unit mute control found for this interface.")
     }
 
     private fun parseConfiguration(data: ByteArray, length: Int, log: StringBuilder) {
@@ -289,7 +290,7 @@ class MainActivity : Activity() {
             val type = data[pos + 1].toInt() and 0xff
             if (type == 4 && size >= 9) currentInterface = data[pos + 2].toInt() and 0xff
             if (type == 0x24 || type == 0x25 || type == 0x21) {
-                log.appendLine("Class-specific descriptor type=0x${type.toString(16)} interface=$currentInterface: ${bytes(data.copyOfRange(pos, pos + size), size)}")
+                logLine(log, "Class-specific descriptor type=0x${type.toString(16)} interface=$currentInterface: ${bytes(data.copyOfRange(pos, pos + size), size)}")
             }
             pos += size
         }
@@ -297,7 +298,7 @@ class MainActivity : Activity() {
 
     private fun logLine(log: StringBuilder, message: String) {
         val stamp = java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(java.util.Date())
-        log.append("[").append(stamp).append("] ").append(message).append('\\n')
+        log.append("[").append(stamp).append("] ").append(message).append('\n')
     }
 
     private fun bytes(data: ByteArray, length: Int): String =
