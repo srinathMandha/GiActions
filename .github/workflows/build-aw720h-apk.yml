@@ -1,0 +1,40 @@
+name: Build AW720H Android Inspector
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'AW720HAndroidInspector/**'
+      - '.github/workflows/build-aw720h-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Gradle and generate wrapper
+        working-directory: AW720HAndroidInspector
+        run: |
+          curl -L https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          /tmp/gradle-8.11.1/bin/gradle wrapper --gradle-version 8.11.1
+
+      - name: Build debug APK
+        working-directory: AW720HAndroidInspector
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AW720H-Android-Inspector-APK
+          path: AW720HAndroidInspector/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
