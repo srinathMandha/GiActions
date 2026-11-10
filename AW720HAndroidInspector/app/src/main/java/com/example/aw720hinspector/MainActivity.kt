@@ -47,6 +47,10 @@ class MainActivity : Activity() {
             text = "Scan for AW720H dongle"
             setOnClickListener { scanDevices() }
         }
+        val capture = Button(this).apply {
+            text = "Capture headset input (10 seconds)"
+            setOnClickListener { captureInput() }
+        }
         val copy = Button(this).apply {
             text = "Copy results"
             setOnClickListener {
@@ -65,6 +69,7 @@ class MainActivity : Activity() {
         layout.addView(title)
         layout.addView(info)
         layout.addView(scan)
+        layout.addView(capture)
         layout.addView(copy)
         layout.addView(output)
         val scroll = ScrollView(this)
@@ -147,6 +152,72 @@ class MainActivity : Activity() {
         }
         report.appendLine("\nSafety: no lighting/output/feature commands were transmitted.")
         output.text = report.toString()
+    }
+
+
+    private fun captureInput() {
+        val device = usbManager.deviceList.values.firstOrNull {
+            it.vendorId == 0x413C && it.productId == 0xA518
+        }
+        if (device == null) {
+            output.text = "AW720H dongle not found. Connect it by USB OTG first."
+            return
+        }
+        if (!usbManager.hasPermission(device)) {
+            output.text = "USB permission is missing. Tap Scan first and grant permission."
+            return
+        }
+        val hid = (0 until device.interfaceCount).map { device.getInterface(it) }
+            .firstOrNull { it.id == 3 && it.interfaceClass == UsbConstants.USB_CLASS_HID && it.endpointCount > 0 }
+        if (hid == null) {
+            output.text = "HID interface 3 or its input endpoint was not found."
+            return
+        }
+        val inputEndpoint = (0 until hid.endpointCount).map { hid.getEndpoint(it) }
+            .firstOrNull { it.direction == UsbConstants.USB_DIR_IN && it.type == UsbConstants.USB_ENDPOINT_XFER_INT }
+        if (inputEndpoint == null) {
+            output.text = "No interrupt IN endpoint found on HID interface 3."
+            return
+        }
+        val connection = usbManager.openDevice(device)
+        if (connection == null) {
+            output.text = "Could not open USB device."
+            return
+        }
+        val captured = StringBuilder()
+        captured.appendLine("AW720H HID input capture")
+        captured.appendLine("Duration: up to 10 seconds")
+        captured.appendLine("Endpoint: ${inputEndpoint.endpointNumber}, max packet: ${inputEndpoint.maxPacketSize}")
+        captured.appendLine("Press headset buttons or change headset controls now.")
+        Thread {
+            try {
+                if (!connection.claimInterface(hid, true)) {
+                    captured.appendLine("Could not claim HID interface 3.")
+                } else {
+                    val buffer = ByteArray(inputEndpoint.maxPacketSize.coerceAtLeast(64))
+                    val deadline = System.currentTimeMillis() + 10_000
+                    var packets = 0
+                    while (System.currentTimeMillis() < deadline) {
+                        val length = connection.bulkTransfer(inputEndpoint, buffer, buffer.size, 500)
+                        if (length > 0) {
+                            packets++
+                            captured.appendLine("Packet $packets ($length bytes): " +
+                                buffer.take(length).joinToString(" ") { "%02x".format(it) })
+                        }
+                    }
+                    if (packets == 0) captured.appendLine("No input packets received. Try pressing a headset button and repeat.")
+                    connection.releaseInterface(hid)
+                }
+            } catch (e: Exception) {
+                captured.appendLine("Capture error: ${e.javaClass.simpleName}: ${e.message}")
+            } finally {
+                connection.close()
+                runOnUiThread {
+                    output.text = captured.toString()
+                }
+            }
+        }.start()
+        output.text = "Capturing HID input for 10 seconds… Press headset buttons now."
     }
 
     private fun append(message: String) {
