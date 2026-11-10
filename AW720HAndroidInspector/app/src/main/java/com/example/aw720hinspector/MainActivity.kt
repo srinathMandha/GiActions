@@ -18,7 +18,7 @@ class MainActivity : Activity() {
             if (intent.action == actionUsbPermission) {
                 val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                 val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                if (device != null && granted) inspect(device)
+                if (device != null && granted) runFullDiagnostic(device)
                 else append("USB permission was not granted.")
             }
         }
@@ -32,37 +32,33 @@ class MainActivity : Activity() {
             setPadding(32, 40, 32, 24)
             setBackgroundColor(0xFF0B1020.toInt())
         }
-        val title = TextView(this).apply {
+        layout.addView(TextView(this).apply {
             text = "Alienware AW720H Inspector"
             textSize = 23f
             setTextColor(0xFFFFFFFF.toInt())
-        }
-        val info = TextView(this).apply {
-            text = "Connect the AW720H 2.4 GHz dongle by USB OTG, then scan. This diagnostic reads USB descriptors only; it does not send lighting commands."
+        })
+        layout.addView(TextView(this).apply {
+            text = "Connect the AW720H 2.4 GHz dongle by USB OTG. The full diagnostic inspects every USB interface, audio class descriptors and readable audio controls, HID reports and interrupt input. It does not send output reports or change settings."
             textSize = 15f
             setTextColor(0xFFB9C7DD.toInt())
             setPadding(0, 18, 0, 18)
-        }
-        val scan = Button(this).apply {
+        })
+        layout.addView(Button(this).apply {
             text = "Scan for AW720H dongle"
             setOnClickListener { scanDevices() }
-        }
-        val vendorCapture = Button(this).apply {
-            text = "Capture vendor input reports (10 seconds)"
-            setOnClickListener { captureVendorInput() }
-        }
-        val capture = Button(this).apply {
-            text = "Capture headset input (10 seconds)"
-            setOnClickListener { captureInput() }
-        }
-        val copy = Button(this).apply {
+        })
+        layout.addView(Button(this).apply {
+            text = "Run full read-only diagnostic"
+            setOnClickListener { scanDevices() }
+        })
+        layout.addView(Button(this).apply {
             text = "Copy results"
             setOnClickListener {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("AW720H USB inspection results", output.text))
+                clipboard.setPrimaryClip(ClipData.newPlainText("AW720H full USB diagnostic", output.text))
                 Toast.makeText(this@MainActivity, "Results copied. Paste them into ChatGPT.", Toast.LENGTH_LONG).show()
             }
-        }
+        })
         output = TextView(this).apply {
             textSize = 12f
             typeface = android.graphics.Typeface.MONOSPACE
@@ -70,12 +66,6 @@ class MainActivity : Activity() {
             setPadding(0, 22, 0, 0)
             text = "Waiting for device…"
         }
-        layout.addView(title)
-        layout.addView(info)
-        layout.addView(scan)
-        layout.addView(vendorCapture)
-        layout.addView(capture)
-        layout.addView(copy)
         layout.addView(output)
         val scroll = ScrollView(this)
         scroll.addView(layout)
@@ -85,19 +75,15 @@ class MainActivity : Activity() {
 
     private fun scanDevices() {
         val devices = usbManager.deviceList.values
-        if (devices.isEmpty()) {
-            output.text = "No USB devices found. Check OTG adapter and reconnect the dongle."
-            return
-        }
         val target = devices.firstOrNull { it.vendorId == 0x413C && it.productId == 0xA518 }
         if (target == null) {
-            output.text = devices.joinToString("\n\n") {
-                "${it.deviceName}\nVID=${hex(it.vendorId)} PID=${hex(it.productId)}"
-            } + "\n\nAW720H (413C:A518) not found."
+            output.text = if (devices.isEmpty()) "No USB devices found. Check OTG adapter and reconnect the dongle."
+            else devices.joinToString("\n\n") { "${it.deviceName}\nVID=${hex(it.vendorId)} PID=${hex(it.productId)}" } +
+                "\n\nAW720H (413C:A518) not found."
             return
         }
         output.text = "Found ${target.deviceName}\nVID=${hex(target.vendorId)} PID=${hex(target.productId)}\nRequesting USB permission…"
-        if (usbManager.hasPermission(target)) inspect(target) else {
+        if (usbManager.hasPermission(target)) runFullDiagnostic(target) else {
             val intent = PendingIntent.getBroadcast(
                 this, 0, Intent(actionUsbPermission).setPackage(packageName),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
@@ -106,191 +92,214 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun inspect(device: UsbDevice) {
-        val report = StringBuilder()
-        report.appendLine("DEVICE: ${device.deviceName}")
-        report.appendLine("VID: ${hex(device.vendorId)}  PID: ${hex(device.productId)}")
-        report.appendLine("INTERFACES: ${device.interfaceCount}")
-        for (i in 0 until device.interfaceCount) {
-            val intf = device.getInterface(i)
-            report.appendLine("\nInterface ${intf.id}: class=${hex(intf.interfaceClass)} subclass=${hex(intf.interfaceSubclass)} protocol=${hex(intf.interfaceProtocol)}")
-            report.appendLine("Endpoints: ${intf.endpointCount}")
-            for (e in 0 until intf.endpointCount) {
-                val ep = intf.getEndpoint(e)
-                report.appendLine("  ep=${ep.endpointNumber} dir=${if (ep.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"} type=${ep.type} maxPacket=${ep.maxPacketSize}")
-            }
-        }
-        val hid = (0 until device.interfaceCount).map { device.getInterface(it) }
-            .firstOrNull { it.id == 3 && it.interfaceClass == UsbConstants.USB_CLASS_HID }
-        if (hid == null) {
-            report.appendLine("\nHID interface 3 not found.")
-            output.text = report.toString()
-            return
-        }
-        val connection = usbManager.openDevice(device)
-        if (connection == null) {
-            report.appendLine("\nCould not open USB device.")
-            output.text = report.toString()
-            return
-        }
-        try {
-            val claimed = connection.claimInterface(hid, true)
-            report.appendLine("\nHID interface 3 claim: $claimed")
-            if (claimed) {
-                // Standard GET_DESCRIPTOR (Report Descriptor, type 0x22).
-                // IN | STANDARD | INTERFACE = 0x81. No output/feature reports are sent.
-                val buffer = ByteArray(1024)
-                val length = connection.controlTransfer(0x81, 0x06, 0x2200, 3, buffer, buffer.size, 3000)
-                report.appendLine("HID report descriptor transfer length: $length")
-                if (length > 0) {
-                    report.appendLine("Descriptor hex:")
-                    report.appendLine(buffer.take(length).joinToString(" ") { "%02x".format(it) })
-                } else {
-                    report.appendLine("Descriptor request returned $length. The device may require another descriptor path or deny this request.")
-                }
-                connection.releaseInterface(hid)
-            } else report.appendLine("Android could not claim HID interface 3.")
-        } catch (e: Exception) {
-            report.appendLine("\nUSB inspection error: ${e.javaClass.simpleName}: ${e.message}")
-        } finally {
-            connection.close()
-        }
-        report.appendLine("\nSafety: no lighting/output/feature commands were transmitted.")
-        output.text = report.toString()
-    }
-
-
-
-    private fun captureVendorInput() {
-        val device = usbManager.deviceList.values.firstOrNull {
-            it.vendorId == 0x413C && it.productId == 0xA518
-        }
-        if (device == null) {
-            output.text = "AW720H dongle not found. Connect it by USB OTG first."
-            return
-        }
-        if (!usbManager.hasPermission(device)) {
-            output.text = "USB permission missing. Tap Scan first and grant permission."
-            return
-        }
-        val hid = (0 until device.interfaceCount).map { device.getInterface(it) }
-            .firstOrNull { it.id == 3 && it.interfaceClass == UsbConstants.USB_CLASS_HID }
-        if (hid == null) {
-            output.text = "HID interface 3 not found."
-            return
-        }
+    private fun runFullDiagnostic(device: UsbDevice) {
         val connection = usbManager.openDevice(device)
         if (connection == null) {
             output.text = "Could not open USB device."
             return
         }
-        val captured = StringBuilder()
-        captured.appendLine("AW720H vendor HID input report polling")
-        captured.appendLine("Read-only GET_REPORT requests for IDs 0x07 (61 bytes) and 0x08 (7 bytes)")
-        captured.appendLine("No output or feature reports are sent.")
+        output.text = "Running full read-only USB diagnostic…"
         Thread {
+            val log = StringBuilder()
             try {
-                if (!connection.claimInterface(hid, true)) {
-                    captured.appendLine("Could not claim HID interface 3.")
-                } else {
-                    val deadline = System.currentTimeMillis() + 10_000
-                    var count = 0
-                    while (System.currentTimeMillis() < deadline) {
-                        for ((reportId, size) in listOf(7 to 61, 8 to 7)) {
-                            val buffer = ByteArray(size + 1)
-                            val result = connection.controlTransfer(
-                                0xA1, 0x01, (0x01 shl 8) or reportId, 3,
-                                buffer, buffer.size, 250
-                            )
-                            if (result > 0) {
-                                count++
-                                captured.appendLine("Report 0x${reportId.toString(16).padStart(2, '0')} ($result bytes): " +
-                                    buffer.take(result).joinToString(" ") { "%02x".format(it) })
+                log.appendLine("AW720H FULL READ-ONLY USB DIAGNOSTIC")
+                log.appendLine("Device: ${device.deviceName} VID=${hex(device.vendorId)} PID=${hex(device.productId)}")
+                log.appendLine("Interfaces reported by Android: ${device.interfaceCount}")
+                log.appendLine("No USB OUT transfers, HID output reports or settings-changing requests are sent.")
+                val config = ByteArray(4096)
+                val configLen = connection.controlTransfer(0x80, 0x06, 0x0200, 0, config, config.size, 2000)
+                log.appendLine("\n=== RAW CONFIGURATION DESCRIPTOR (length=$configLen) ===")
+                if (configLen > 0) {
+                    log.appendLine(config.take(configLen).joinToString(" ") { "%02x".format(it) })
+                    parseConfiguration(config, configLen, log)
+                } else log.appendLine("Configuration descriptor request returned $configLen")
+
+                for (i in 0 until device.interfaceCount) {
+                    val intf = device.getInterface(i)
+                    log.appendLine("\n=== INTERFACE id=${intf.id} alt=${intf.alternateSetting} class=${hex(intf.interfaceClass)} subclass=${hex(intf.interfaceSubclass)} protocol=${hex(intf.interfaceProtocol)} ===")
+                    val claimed = try { connection.claimInterface(intf, true) } catch (e: Exception) {
+                        log.appendLine("Claim error: ${e.message}"); false
+                    }
+                    log.appendLine("Claimed: $claimed")
+                    if (!claimed) continue
+                    try {
+                        // Standard GET_STATUS: read-only, recipient=interface.
+                        val status = ByteArray(2)
+                        val statusLen = connection.controlTransfer(0x81, 0x00, 0, intf.id, status, 2, 500)
+                        log.appendLine("Standard interface GET_STATUS: len=$statusLen data=${bytes(status, statusLen)}")
+
+                        if (intf.interfaceClass == UsbConstants.USB_CLASS_HID) {
+                            inspectHid(connection, intf, log)
+                        } else if (intf.interfaceClass == UsbConstants.USB_CLASS_AUDIO) {
+                            log.appendLine("Audio class interface: class-specific descriptors are included in the raw configuration dump above.")
+                            queryAudioFeatureUnits(connection, config, configLen, intf.id, log)
+                        } else {
+                            log.appendLine("No class-specific control requests sent for this interface; descriptor and standard status inspection only.")
+                        }
+
+                        for (e in 0 until intf.endpointCount) {
+                            val ep = intf.getEndpoint(e)
+                            log.appendLine("Endpoint ${ep.endpointNumber}: direction=${if (ep.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"}, type=${ep.type}, maxPacket=${ep.maxPacketSize}, interval=${ep.interval}")
+                        }
+                    } finally {
+                        try { connection.releaseInterface(intf) } catch (_: Exception) {}
+                    }
+                }
+                // Read interrupt IN endpoints on HID interfaces after descriptor/control inspection.
+                log.appendLine("\n=== HID INTERRUPT INPUT CAPTURE (5 seconds total) ===")
+                val hidInterfaces = (0 until device.interfaceCount).map { device.getInterface(it) }
+                    .filter { it.interfaceClass == UsbConstants.USB_CLASS_HID }
+                val endTime = System.currentTimeMillis() + 5000
+                for (intf in hidInterfaces) {
+                    val ep = (0 until intf.endpointCount).map { intf.getEndpoint(it) }.firstOrNull {
+                        it.direction == UsbConstants.USB_DIR_IN && it.type == UsbConstants.USB_ENDPOINT_XFER_INT
+                    } ?: continue
+                    if (System.currentTimeMillis() >= endTime) break
+                    if (!connection.claimInterface(intf, true)) {
+                        log.appendLine("HID interface ${intf.id}: could not claim for interrupt capture")
+                        continue
+                    }
+                    try {
+                        val buffer = ByteArray(ep.maxPacketSize.coerceAtLeast(8))
+                        var packetCount = 0
+                        while (System.currentTimeMillis() < endTime) {
+                            val n = connection.bulkTransfer(ep, buffer, buffer.size, 250)
+                            if (n > 0) {
+                                packetCount++
+                                log.appendLine("HID interface ${intf.id} packet $packetCount: ${bytes(buffer, n)}")
                             }
                         }
+                        if (packetCount == 0) log.appendLine("HID interface ${intf.id}: no interrupt packets during capture")
+                    } finally {
+                        try { connection.releaseInterface(intf) } catch (_: Exception) {}
                     }
-                    if (count == 0) captured.appendLine("No vendor input reports returned. The dongle may only provide these reports in response to specific device events.")
-                    connection.releaseInterface(hid)
                 }
+                log.appendLine("\n=== END ===")
+                log.appendLine("Read-only requests performed: configuration/report descriptors, standard interface GET_STATUS, HID GET_REPORT for input/feature reports declared by the report descriptor, and Audio Class GET_CUR for discovered mute controls.")
+                log.appendLine("No output report or USB OUT transfer was sent.")
             } catch (e: Exception) {
-                captured.appendLine("Polling error: ${e.javaClass.simpleName}: ${e.message}")
+                log.appendLine("\nDiagnostic error: ${e.javaClass.simpleName}: ${e.message}")
             } finally {
                 connection.close()
-                runOnUiThread { output.text = captured.toString() }
+                runOnUiThread { output.text = log.toString() }
             }
         }.start()
-        output.text = "Polling vendor input reports for 10 seconds… Try mic mute/unmute now."
     }
 
-    private fun captureInput() {
-        val device = usbManager.deviceList.values.firstOrNull {
-            it.vendorId == 0x413C && it.productId == 0xA518
+    private fun inspectHid(c: UsbDeviceConnection, intf: UsbInterface, log: StringBuilder) {
+        val desc = ByteArray(2048)
+        val n = c.controlTransfer(0x81, 0x06, 0x2200, intf.id, desc, desc.size, 1500)
+        log.appendLine("HID report descriptor length=$n")
+        if (n <= 0) return
+        log.appendLine("HID report descriptor: ${bytes(desc, n)}")
+        val reports = parseHidReports(desc, n)
+        for ((key, size) in reports) {
+            val type = key.first
+            val id = key.second
+            if (type != 1 && type != 3) continue // Input and Feature GET_REPORT only; never Output.
+            val buffer = ByteArray((size + 1).coerceAtMost(1024))
+            val result = c.controlTransfer(0xA1, 0x01, (type shl 8) or id, intf.id, buffer, buffer.size, 500)
+            log.appendLine("HID GET_REPORT type=$type id=0x${id.toString(16)} expectedPayload=$size result=$result data=${bytes(buffer, result)}")
         }
-        if (device == null) {
-            output.text = "AW720H dongle not found. Connect it by USB OTG first."
-            return
-        }
-        if (!usbManager.hasPermission(device)) {
-            output.text = "USB permission is missing. Tap Scan first and grant permission."
-            return
-        }
-        val hid = (0 until device.interfaceCount).map { device.getInterface(it) }
-            .firstOrNull { it.id == 3 && it.interfaceClass == UsbConstants.USB_CLASS_HID && it.endpointCount > 0 }
-        if (hid == null) {
-            output.text = "HID interface 3 or its input endpoint was not found."
-            return
-        }
-        val inputEndpoint = (0 until hid.endpointCount).map { hid.getEndpoint(it) }
-            .firstOrNull { it.direction == UsbConstants.USB_DIR_IN && it.type == UsbConstants.USB_ENDPOINT_XFER_INT }
-        if (inputEndpoint == null) {
-            output.text = "No interrupt IN endpoint found on HID interface 3."
-            return
-        }
-        val connection = usbManager.openDevice(device)
-        if (connection == null) {
-            output.text = "Could not open USB device."
-            return
-        }
-        val captured = StringBuilder()
-        captured.appendLine("AW720H HID input capture")
-        captured.appendLine("Duration: up to 10 seconds")
-        captured.appendLine("Endpoint: ${inputEndpoint.endpointNumber}, max packet: ${inputEndpoint.maxPacketSize}")
-        captured.appendLine("Press headset buttons or change headset controls now.")
-        Thread {
-            try {
-                if (!connection.claimInterface(hid, true)) {
-                    captured.appendLine("Could not claim HID interface 3.")
-                } else {
-                    val buffer = ByteArray(inputEndpoint.maxPacketSize.coerceAtLeast(64))
-                    val deadline = System.currentTimeMillis() + 10_000
-                    var packets = 0
-                    while (System.currentTimeMillis() < deadline) {
-                        val length = connection.bulkTransfer(inputEndpoint, buffer, buffer.size, 500)
-                        if (length > 0) {
-                            packets++
-                            captured.appendLine("Packet $packets ($length bytes): " +
-                                buffer.take(length).joinToString(" ") { "%02x".format(it) })
-                        }
-                    }
-                    if (packets == 0) captured.appendLine("No input packets received. Try pressing a headset button and repeat.")
-                    connection.releaseInterface(hid)
+    }
+
+    private fun parseHidReports(data: ByteArray, length: Int): Map<Pair<Int, Int>, Int> {
+        val result = linkedMapOf<Pair<Int, Int>, Int>()
+        var pos = 0
+        var reportSize = 0
+        var reportCount = 0
+        var reportId = 0
+        while (pos < length) {
+            val b = data[pos++].toInt() and 0xff
+            if (b == 0xFE) {
+                if (pos + 1 >= length) break
+                val size = data[pos].toInt() and 0xff
+                pos += 2 + size
+                continue
+            }
+            val sizeCode = b and 3
+            val size = when (sizeCode) { 3 -> 4; else -> sizeCode }
+            if (pos + size > length) break
+            var value = 0
+            for (j in 0 until size) value = value or ((data[pos++].toInt() and 0xff) shl (8 * j))
+            when ((b shr 2) and 3) {
+                1 -> when ((b shr 4) and 15) {
+                    7 -> reportSize = value
+                    8 -> reportId = value
+                    9 -> reportCount = value
                 }
-            } catch (e: Exception) {
-                captured.appendLine("Capture error: ${e.javaClass.simpleName}: ${e.message}")
-            } finally {
-                connection.close()
-                runOnUiThread {
-                    output.text = captured.toString()
+                0 -> {
+                    val tag = (b shr 4) and 15
+                    if (tag == 8 || tag == 11) {
+                        val type = if (tag == 8) 1 else 3
+                        val bits = reportSize.toLong() * reportCount
+                        val bytes = ((bits + 7) / 8).toInt()
+                        val k = type to reportId
+                        result[k] = (result[k] ?: 0) + bytes
+                    }
                 }
             }
-        }.start()
-        output.text = "Capturing HID input for 10 seconds… Press headset buttons now."
+        }
+        return result
     }
+
+    private fun queryAudioFeatureUnits(c: UsbDeviceConnection, config: ByteArray, length: Int, interfaceId: Int, log: StringBuilder) {
+        if (length <= 0) return
+        var pos = 0
+        var found = 0
+        while (pos + 2 <= length) {
+            val size = config[pos].toInt() and 0xff
+            if (size < 2 || pos + size > length) break
+            val type = config[pos + 1].toInt() and 0xff
+            if (type == 0x24 && size >= 7) {
+                val subtype = config[pos + 2].toInt() and 0xff
+                if (subtype == 0x06) { // Audio Feature Unit descriptor
+                    val unitId = config[pos + 3].toInt() and 0xff
+                    val controlSize = config[pos + 5].toInt() and 0xff
+                    if (controlSize in 1..4 && size >= 6 + controlSize) {
+                        val controls = (0 until controlSize).fold(0L) { acc, j ->
+                            acc or ((config[pos + 6 + j].toLong() and 0xff) shl (8 * j))
+                        }
+                        log.appendLine("Audio Feature Unit candidate: interface=$interfaceId unit=$unitId controlSize=$controlSize masterControls=0x${controls.toString(16)}")
+                        if ((controls and 1L) != 0L) {
+                            val value = ByteArray(4)
+                            val idx = (unitId shl 8) or interfaceId
+                            val got = c.controlTransfer(0xA1, 0x81, 0x0100, idx, value, 1, 700)
+                            log.appendLine("Audio Class GET_CUR mute (unit=$unitId channel=0): len=$got value=${bytes(value, got)} (0=unmuted, 1=muted when supported)")
+                            found++
+                        } else log.appendLine("Mute control bit not advertised in master channel; no mute query sent.")
+                    }
+                }
+            }
+            pos += size
+        }
+        if (found == 0) log.appendLine("No advertised Audio Feature Unit mute control found for this interface.")
+    }
+
+    private fun parseConfiguration(data: ByteArray, length: Int, log: StringBuilder) {
+        var pos = 0
+        var currentInterface = -1
+        while (pos + 2 <= length) {
+            val size = data[pos].toInt() and 0xff
+            if (size < 2 || pos + size > length) break
+            val type = data[pos + 1].toInt() and 0xff
+            if (type == 4 && size >= 9) currentInterface = data[pos + 2].toInt() and 0xff
+            if (type == 0x24 || type == 0x25 || type == 0x21) {
+                log.appendLine("Class-specific descriptor type=0x${type.toString(16)} interface=$currentInterface: ${bytes(data.copyOfRange(pos, pos + size), size)}")
+            }
+            pos += size
+        }
+    }
+
+    private fun bytes(data: ByteArray, length: Int): String =
+        if (length <= 0) "(no data)" else data.take(length.coerceAtMost(data.size)).joinToString(" ") { "%02x".format(it) }
 
     private fun append(message: String) {
         output.text = output.text.toString() + "\n" + message
     }
+
     private fun hex(value: Int) = "0x" + String.format(Locale.US, "%04X", value)
+
     override fun onDestroy() {
         try { unregisterReceiver(permissionReceiver) } catch (_: Exception) {}
         super.onDestroy()
